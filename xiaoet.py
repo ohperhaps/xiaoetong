@@ -18,6 +18,7 @@ class Xet(object):
         self.appid = appid
         self.configs = self.config('r') or {}
         self.session = self.login(re_login)
+        self.download_dir = 'download'
 
     def config(self, mode):
         try:
@@ -39,7 +40,7 @@ class Xet(object):
             
     def login(self, re_login=False):
         session = requests.Session()
-        if not re_login and self.configs and self.configs.get('last_appid') == self.appid and (time.time() - self.configs.get('cookies_time')) < 14400: # 4小时
+        if not re_login and self.configs.get('last_appid') == self.appid and (time.time() - self.configs.get('cookies_time')) < 14400: # 4小时
             for key, value in self.configs['cookies'].items():
                 session.cookies[key] = value
         else:
@@ -147,9 +148,8 @@ class Xet(object):
 
     def get_productid(self, resourceid):
         res = self.get_resource(resourceid)
-        if isinstance(res, dict):
+        if res.get('products'):
             print (res['products'][0]['product_id'])
-            return res['products'][0]['product_id']
         return
 
     def download_video(self, download_dir, resource, nocache=False):
@@ -162,6 +162,7 @@ class Xet(object):
         media = m3u8.loads(self.session.get(url).text)
         url_prefix, segments, changed, complete = url.split('v.f230')[0], SegmentList(), False, True
 
+        print('Total: {} part'.format(len(media.data['segments'])))
         for index, segment in enumerate(media.data['segments']):
             ts_file = os.path.join(resource_dir, 'v_{}.ts'.format(index))
             if not nocache and os.path.exists(ts_file):
@@ -186,7 +187,10 @@ class Xet(object):
             media.segments = segments
             with open(m3u8_file, 'w', encoding='utf8') as f:
                 f.write(media.dumps())
-        return complete, resource['title'], m3u8_file
+        metadata = {'title': resource['title'], 'complete': complete}
+        with open(os.path.join(download_dir, resource['id'], 'metadata'), 'w') as f:
+            json.dump(metadata, f)
+        return
 
     def download_audio(self, download_dir, resource, nocache=False):
         url = resource['audio_url'].replace('\\', '')
@@ -206,14 +210,19 @@ class Xet(object):
                 print('Download Failed: {title} {file}'.format(title=resource['title'], file=audio_file))
         return
 
-    def transcode(self, src, dest):
-        ff = ffmpy.FFmpeg(inputs={src: ['-protocol_whitelist', 'crypto,file,http,https,tcp,tls']},outputs={dest: None})
-        print(ff.cmd)
-        ff.run()
+    def transcode(self, resourceid):
+        resource_dir = os.path.join(self.download_dir, resourceid)
+        if os.path.exists(resource_dir) and os.path.exists(os.path.join(resource_dir, 'metadata')):
+            with open(os.path.join(resource_dir, 'metadata')) as f:
+                metadata = json.load(f)
+            if metadata['complete'] == 'true':
+                ff = ffmpy.FFmpeg(inputs={os.path.join(resource_dir, 'video.m3u8'): ['-protocol_whitelist', 'crypto,file,http,https,tcp,tls']}, outputs={os.path.join(resource_dir, metadata['title']): None})
+                print(ff.cmd)
+                ff.run()
+        return
 
     def download(self, id, nocahce=False):
-        download_dir = 'download'
-        os.makedirs(download_dir, exist_ok=True)
+        os.makedirs(self.download_dir, exist_ok=True)
         if self.transform_type(id) == 'product':
             resource_list = [self.get_resource(resource['id']) for resource in self.get_resource_list(id)]
         else:
@@ -222,11 +231,10 @@ class Xet(object):
         for resource in resource_list:
             if resource.get('is_available') == 1:
                 if self.transform_type(resource['id']) == 'audio':
-                    self.download_audio(download_dir, resource, nocahce)
+                    self.download_audio(self.download_dir, resource, nocahce)
                 elif self.transform_type(resource['id']) == 'video':
-                    status, videoname, playlist = self.download_video(download_dir, resource, nocahce)
-                    if status:
-                        self.transcode(playlist, os.path.join(download_dir, videoname))
+                    self.download_video(self.download_dir, resource, nocahce)
+                    self.transcode(resource['id'])
             elif resource.get('is_available') == 0:
                 print('Not purchased. name: {} resourceid: {}'.format(resource['title'], resource['id']))
             else:
@@ -234,15 +242,15 @@ class Xet(object):
         return
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description='''Download tools for Xiaoe-tech''')
+    parser = argparse.ArgumentParser(description='''Download tools for Xiaoe-tech''')
     parser.add_argument("appid", type=str,
                         help='''Shop ID of xiaoe-tech.''')
     parser.add_argument("-d", type=str, metavar='ID', help='''Download resources by Resource ID or Product ID.''')
-    parser.add_argument("-rl", type=str, metavar='Resource ID', help='''Display All resources of the Product ID''')
+    parser.add_argument("-rl", type=str, metavar='Product ID', help='''Display All resources of the Product ID''')
     parser.add_argument("-pl", action='store_true', help='''Display All products of the Shop''')
     parser.add_argument("-r2p", type=str, metavar='Resource ID', help='''Get Product ID from Resource ID''')
-    parser.add_argument("--nocahe", action='store_true', help='''Download without cache''')
+    parser.add_argument("-tc", type=str, metavar='Resource ID', help='''Combine and transcode the video''')
+    parser.add_argument("--nocache", action='store_true', help='''Download without cache''')
     parser.add_argument("--login", action='store_true', help='''Force to re-login''')
     return parser.parse_args()
 
