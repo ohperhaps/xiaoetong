@@ -215,8 +215,8 @@ class Xet(object):
         if os.path.exists(resource_dir) and os.path.exists(os.path.join(resource_dir, 'metadata')):
             with open(os.path.join(resource_dir, 'metadata')) as f:
                 metadata = json.load(f)
-            if metadata['complete'] == 'true':
-                ff = ffmpy.FFmpeg(inputs={os.path.join(resource_dir, 'video.m3u8'): ['-protocol_whitelist', 'crypto,file,http,https,tcp,tls']}, outputs={os.path.join(resource_dir, metadata['title']): None})
+            if metadata['complete']:
+                ff = ffmpy.FFmpeg(inputs={os.path.join(resource_dir, 'video.m3u8'): ['-protocol_whitelist', 'crypto,file,http,https,tcp,tls']}, outputs={os.path.join(self.download_dir, metadata['title'] + '.mp4'): None})
                 print(ff.cmd)
                 ff.run()
         return
@@ -265,6 +265,8 @@ def main():
         xet.get_product_list()
     if args.r2p:
         xet.get_productid(args.r2p)
+    if args.tc:
+        xet.transcode(args.tc)
 
 if __name__ == '__main__':
     main()
